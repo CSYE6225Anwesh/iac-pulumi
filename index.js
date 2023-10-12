@@ -8,15 +8,16 @@ const availabilityZones = config.availabilityZones;  // Use the config
 
 // Create a new VPC
 const vpc = new aws.ec2.Vpc("myVpc", {
-    cidrBlock: config.vpcCidr,  // Use the config
+    cidrBlock: config.vpcCidrBlock, // Use the CIDR block from the configuration
     enableDnsSupport: true,
     enableDnsHostnames: true,
-    tags: { Name: "demo-vpc"},
+    tags: { Name: "my-vpc" },
 });
 
 // Create an Internet Gateway and attach it to the VPC
 const internetGateway = new aws.ec2.InternetGateway("myInternetGateway", {
     vpcId: vpc.id,
+    tags: { Name: "my-internet-gateway" }, // Assign a name to the Internet Gateway
 });
 
 // Create public and private subnets
@@ -26,6 +27,7 @@ const publicSubnets = availabilityZones.map((az, index) => {
         cidrBlock: `10.0.${index}.0/24`,
         availabilityZone: az,
         mapPublicIpOnLaunch: true,
+        tags: { Name: `public-subnet-${index}` }, // Assign names to public subnets
     });
 });
 
@@ -34,6 +36,7 @@ const privateSubnets = availabilityZones.map((az, index) => {
         vpcId: vpc.id,
         cidrBlock: `10.0.${index + 3}.0/24`,
         availabilityZone: az,
+        tags: { Name: `private-subnet-${index}` }, // Assign names to private subnets
     });
 });
 
@@ -42,10 +45,11 @@ const publicRouteTable = new aws.ec2.RouteTable("publicRouteTable", {
     vpcId: vpc.id,
     routes: [
         {
-            cidrBlock: config.publicRouteCidr,  // Use the config
+            cidrBlock: config.publicRouteCidr,
             gatewayId: internetGateway.id,
         },
     ],
+    tags: { Name: "public-route-table" }, // Assign a name to the public route table
 });
 
 publicSubnets.forEach((subnet, index) => {
@@ -58,6 +62,7 @@ publicSubnets.forEach((subnet, index) => {
 // Create a private route table and associate it with private subnets
 const privateRouteTable = new aws.ec2.RouteTable("privateRouteTable", {
     vpcId: vpc.id,
+    tags: { Name: "private-route-table" }, // Assign a name to the private route table
 });
 
 privateSubnets.forEach((subnet, index) => {
