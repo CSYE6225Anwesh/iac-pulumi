@@ -2,6 +2,8 @@ config:
   Assigment_4:publicRouteCidr: 0.0.0.0/0
   Assigment_4:region: us-east-1
   Assigment_4:vpcCidrBlock: 10.0.0.0/16
+  Assigment_4:ami: "ami-023a49ed802f76245"
+  Assigment_4:key: "dev_keypair"
   aws:profile: dev
   aws:region: us-east-1
 
