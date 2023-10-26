@@ -11,6 +11,11 @@ const vpcCidrBlock = config.require("vpcCidrBlock");
 const publicRouteCidr = config.require("publicRouteCidr");
 const region = config.require("region");
 
+const ami = config.require("ami");
+const key = config.require("key");
+
+
+
 AWS.config.update({ region: region });
 
 
@@ -259,10 +264,10 @@ const rdsInstanceDetails = pulumi.all([rdsInstanceCreate.identifier]).apply(asyn
         echo "DB_DATABASE=${dbName}" >> /opt/csyeuser/webapp/.env
         echo "DB_DIALECT=${dbDialect}" >> /opt/csyeuser/webapp/.env`;
 
-      const loginKey = "dev_keypair";
+      const loginKey = key;
       // Create an EC2 instance with the dynamic user data
       const ec2Instance = new aws.ec2.Instance("myEC2Instance", {
-        ami: "ami-023a49ed802f76245",
+        ami: ami,
         keyName: loginKey,
         instanceType: "t2.micro",
         vpcSecurityGroupIds: [applicationSecurityGroup.id, dbSecurityGroup.id],
