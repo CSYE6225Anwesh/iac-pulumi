@@ -49,3 +49,5 @@
 ## Destroy Pulumi
 
 - pulumi destroy
+
+..
