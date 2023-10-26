@@ -2,8 +2,9 @@
     "name": "Assigment_4",
     "main": "index.js",
     "dependencies": {
-        "@pulumi/pulumi": "^3.0.0",
         "@pulumi/aws": "^5.0.0",
-        "@pulumi/awsx": "^1.0.0"
+        "@pulumi/awsx": "^1.0.0",
+        "@pulumi/pulumi": "^3.0.0",
+        "aws-sdk": "^2.1478.0"
     }
 }

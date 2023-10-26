@@ -1,12 +1,17 @@
 const pulumi = require("@pulumi/pulumi");
 const aws = require("@pulumi/aws");
+const AWS = require("aws-sdk");
 
+
+const rds = new AWS.RDS({ region: "us-east-1" });
 
 const config = new pulumi.Config();
 
 const vpcCidrBlock = config.require("vpcCidrBlock");
 const publicRouteCidr = config.require("publicRouteCidr");
 const region = config.require("region");
+
+AWS.config.update({ region: region });
 
 
 // Fetch availability zones asynchronously
@@ -102,6 +107,9 @@ privateSubnets.forEach((subnet, index) => {
 const applicationSecurityGroup = new aws.ec2.SecurityGroup("applicationSecurityGroup", {
     vpcId: vpc.id,
     description: "Security group for web applications",
+    egress: [
+        { protocol: "-1", fromPort: 0, toPort: 0, cidrBlocks: [publicRouteCidr] }
+    ],
     tags: {
         Name: "application-sg",
     }
@@ -115,7 +123,7 @@ new aws.ec2.SecurityGroupRule("allow-ssh", {
     fromPort: 22,
     toPort: 22,
     protocol: "tcp",
-    cidrBlocks: ["0.0.0.0/0"],  
+    cidrBlocks: [publicRouteCidr],  
     securityGroupId: applicationSecurityGroup.id,
 });
 
@@ -125,7 +133,7 @@ new aws.ec2.SecurityGroupRule("allow-http", {
     fromPort: 80,
     toPort: 80,
     protocol: "tcp",
-    cidrBlocks: ["0.0.0.0/0"],  
+    cidrBlocks: [publicRouteCidr],  
     securityGroupId: applicationSecurityGroup.id,
 });
 
@@ -135,7 +143,7 @@ new aws.ec2.SecurityGroupRule("allow-https", {
     fromPort: 443,
     toPort: 443,
     protocol: "tcp",
-    cidrBlocks: ["0.0.0.0/0"],  
+    cidrBlocks: [publicRouteCidr],  
     securityGroupId: applicationSecurityGroup.id,
 });
 
@@ -145,31 +153,137 @@ new aws.ec2.SecurityGroupRule("allow-app-port", {
     fromPort: 8080,
     toPort: 8080,
     protocol: "tcp",
-    cidrBlocks: ["0.0.0.0/0"],  
+    cidrBlocks: [publicRouteCidr],  
     securityGroupId: applicationSecurityGroup.id,
 });
 
 
-const loginKey = "dev_keypair";
 
-// Create an EC2 instance
-const ec2Instance = new aws.ec2.Instance("myEC2Instance", {
-    ami: "ami-0e235087c50ae3d7e", // Replace with your custom AMI ID
-    keyName: loginKey,
-    instanceType: "t2.micro", // Adjust instance type as needed
-    vpcSecurityGroupIds: [applicationSecurityGroup.id],
-    subnetId: publicSubnets[0].id, // Choose the subnet you want to launch in
-    rootBlockDevice: {
-        volumeSize: 25,
-        volumeType: "gp2",
-        deleteOnTermination: true,
-    },
-    associatePublicIpAddress: true,
+
+
+// Create an EC2 security group for RDS
+const dbSecurityGroup = new aws.ec2.SecurityGroup("dbSecurityGroup", {
+    vpcId: vpc.id,
+    description: "Security group for RDS",
     tags: {
-        Name: "my-ec2-instance",
+      Name: "db-sg",
     },
+  });
+
+  // Allow incoming connections from the application security group
+  new aws.ec2.SecurityGroupRule("allow-rds-from-app", {
+    type: "ingress",
+    toPort: 3306,
+    fromPort: 3306,
+    protocol: "tcp",
+    sourceSecurityGroupId: applicationSecurityGroup.id,
+    securityGroupId: dbSecurityGroup.id,
+  });
+
+//   // Restrict access to the database security group (you can adjust this rule as needed)
+//     new aws.ec2.SecurityGroupRule("restrict-db-access", {
+//     type: "ingress",
+//     toPort: 3306, 
+//     protocol: "tcp",
+//     cidrBlocks: ["0.0.0.0/0"], // Restrict this to your specific IP or network range
+//     securityGroupId: rdsSecurityGroup.id,
+//   });
+
+
+// Create a parameter group for RDS
+const dbParameterGroup = new aws.rds.ParameterGroup("dbParameterGroup", {
+    family: "mariadb10.6", // Replace with the appropriate family for your database engine and version
+    name: "custom-parameter-group",
+    description: "Custom DB Parameter Group",
+    parameters: [
+        {
+            name: "character_set_server",
+            value: "utf8",
+        },
+        {
+            name: "collation_server",
+            value: "utf8_general_ci",
+        },
+        // Add other database-specific parameters here
+    ],
+  });
+
+  // Create a DB Subnet Group
+  const dbSubnetGroup = new aws.rds.SubnetGroup("my-db-subnet-group", {
+    description: "My RDS Subnet Group",
+    subnetIds: [privateSubnets[0].id, privateSubnets[1].id], // Replace with the actual subnet IDs you want to use.
+  });
+
+
+  
+
+
+  // Create an RDS instance
+  const rdsInstanceCreate = new aws.rds.Instance("webappclouddb-rds-instance", {
+    allocatedStorage: 20,
+    storageType: "gp2",
+    engine: "mariadb",
+    engineVersion: "10.6",
+    instanceClass: "db.t2.micro",
+    username: "root", 
+    password: "password", 
+    dbName: "webappclouddb", // Database name
+    skipFinalSnapshot: true,
+    multiAz: false, // Multi-AZ deployment set to No
+    publiclyAccessible: false, // Public accessibility set to No
+    vpcSecurityGroupIds: [dbSecurityGroup.id],
+    parameterGroupName: dbParameterGroup.name,
+    dbSubnetGroupName: dbSubnetGroup.name,
+    identifier: "webappclouddb-instance",
 });
 
+
+
+// Retrieve RDS details using AWS SDK v3
+const rdsInstanceDetails = pulumi.all([rdsInstanceCreate.identifier]).apply(async ([instanceId]) => {
+    try {
+      const response = await rds.describeDBInstances({ DBInstanceIdentifier: instanceId }).promise();
+      const dbInstance = response.DBInstances[0]; // Assuming there's only one RDS instance
+
+      // Extract the connection details
+      const dbUsername = dbInstance.MasterUsername;
+      const dbEndpoint = dbInstance.Endpoint.Address;
+      const dbName = dbInstance.DBName; // Replace with your database name
+      const dbDialect = "mysql"; // Replace with your database dialect
+
+      // User data script with dynamic values
+      const user_data = `#!/bin/bash
+        echo "DB_USERNAME=${dbUsername}" >> /opt/csyeuser/webapp/.env
+        echo "DB_PASSWORD=password" >> /opt/csyeuser/webapp/.env
+        echo "DB_HOST=${dbEndpoint}" >> /opt/csyeuser/webapp/.env
+        echo "DB_DATABASE=${dbName}" >> /opt/csyeuser/webapp/.env
+        echo "DB_DIALECT=${dbDialect}" >> /opt/csyeuser/webapp/.env`;
+
+      const loginKey = "dev_keypair";
+      // Create an EC2 instance with the dynamic user data
+      const ec2Instance = new aws.ec2.Instance("myEC2Instance", {
+        ami: "ami-023a49ed802f76245",
+        keyName: loginKey,
+        instanceType: "t2.micro",
+        vpcSecurityGroupIds: [applicationSecurityGroup.id, dbSecurityGroup.id],
+        subnetId: publicSubnets[0].id,
+        rootBlockDevice: {
+          volumeSize: 25,
+          volumeType: "gp2",
+          deleteOnTermination: true,
+        },
+        associatePublicIpAddress: true,
+        userData: user_data, // Use the dynamic user data here
+        tags: {
+          Name: "my-ec2-instance",
+        },
+      });
+
+
+    } catch (error) {
+      console.error("Error retrieving RDS details:", error);
+    }
+});
 
 // // Export VPC ID for other resources
 // export const vpcId = vpc.id;
