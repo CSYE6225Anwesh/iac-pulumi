@@ -2,9 +2,11 @@
     "name": "Assigment_4",
     "main": "index.js",
     "dependencies": {
+        "@aws-sdk/client-ec2": "^3.441.0",
+        "@aws-sdk/client-rds": "^3.441.0",
         "@pulumi/aws": "^5.0.0",
         "@pulumi/awsx": "^1.0.0",
         "@pulumi/pulumi": "^3.0.0",
-        "aws-sdk": "^2.1478.0"
+        "aws-sdk": "^2.1490.0"
     }
 }
