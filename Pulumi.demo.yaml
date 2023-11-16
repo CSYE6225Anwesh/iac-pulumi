@@ -2,7 +2,7 @@ config:
   Assigment_4:publicRouteCidr: 0.0.0.0/0
   Assigment_4:region: us-east-1
   Assigment_4:vpcCidrBlock: 10.0.0.0/16
-  Assigment_4:ami: "ami-0cce530807f193527"
+  Assigment_4:ami: "ami-03dd790e4d3582edc"
   Assigment_4:key: "demo_keypair"
   Assigment_4:zoneId: "Z02865191H3LTWP85JE6G"
   aws:profile: demo

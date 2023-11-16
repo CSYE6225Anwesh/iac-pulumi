@@ -1,7 +1,10 @@
 const pulumi = require("@pulumi/pulumi");
 const aws = require("@pulumi/aws");
 const AWS = require("aws-sdk");
-const { RDSClient, DescribeDBInstancesCommand } = require("@aws-sdk/client-rds");
+const {
+  RDSClient,
+  DescribeDBInstancesCommand,
+} = require("@aws-sdk/client-rds");
 
 const rds = new AWS.RDS({ region: "us-east-1" });
 
@@ -17,9 +20,11 @@ const hostedZoneId = config.require("zoneId");
 AWS.config.update({ region: region });
 
 // Fetch availability zones asynchronously
-const availabilityZonesPromise = aws.getAvailabilityZones({
-  state: "available",
-}).then((result) => result.names.slice(0, 3)); // Slicing from index 0 to 2
+const availabilityZonesPromise = aws
+  .getAvailabilityZones({
+    state: "available",
+  })
+  .then((result) => result.names.slice(0, 3)); // Slicing from index 0 to 2
 
 const run = async () => {
   // Automatically calculate availability zones based on the region
@@ -46,7 +51,9 @@ const run = async () => {
     const thirdOctet = index + 1;
     return new aws.ec2.Subnet(`publicSubnet-${index}`, {
       vpcId: vpc.id,
-      cidrBlock: `${vpcCidrBlock.split('.')[0]}.${vpcCidrBlock.split('.')[1]}.${thirdOctet}.0/24`,
+      cidrBlock: `${vpcCidrBlock.split(".")[0]}.${
+        vpcCidrBlock.split(".")[1]
+      }.${thirdOctet}.0/24`,
       availabilityZone: az,
       mapPublicIpOnLaunch: true,
       tags: { Name: `public-subnet-${index}` },
@@ -57,7 +64,9 @@ const run = async () => {
     const thirdOctet = index + 1;
     return new aws.ec2.Subnet(`privateSubnet-${index}`, {
       vpcId: vpc.id,
-      cidrBlock: `${vpcCidrBlock.split('.')[0]}.${vpcCidrBlock.split('.')[1]}.${(parseInt(thirdOctet) * 10)}.0/24`,
+      cidrBlock: `${vpcCidrBlock.split(".")[0]}.${vpcCidrBlock.split(".")[1]}.${
+        parseInt(thirdOctet) * 10
+      }.0/24`,
       availabilityZone: az,
       tags: { Name: `private-subnet-${index}` },
     });
@@ -76,10 +85,13 @@ const run = async () => {
   });
 
   publicSubnets.forEach((subnet, index) => {
-    const subnetAssoc = new aws.ec2.RouteTableAssociation(`publicSubnetAssoc-${index}`, {
-      subnetId: subnet.id,
-      routeTableId: publicRouteTable.id,
-    });
+    const subnetAssoc = new aws.ec2.RouteTableAssociation(
+      `publicSubnetAssoc-${index}`,
+      {
+        subnetId: subnet.id,
+        routeTableId: publicRouteTable.id,
+      }
+    );
   });
 
   // Create a private route table and associate it with private subnets
@@ -89,62 +101,34 @@ const run = async () => {
   });
 
   privateSubnets.forEach((subnet, index) => {
-    const subnetAssoc = new aws.ec2.RouteTableAssociation(`privateSubnetAssoc-${index}`, {
-      subnetId: subnet.id,
-      routeTableId: privateRouteTable.id,
-    });
+    const subnetAssoc = new aws.ec2.RouteTableAssociation(
+      `privateSubnetAssoc-${index}`,
+      {
+        subnetId: subnet.id,
+        routeTableId: privateRouteTable.id,
+      }
+    );
   });
 
   // Create an Application Security Group
-  const applicationSecurityGroup = new aws.ec2.SecurityGroup("applicationSecurityGroup", {
-    vpcId: vpc.id,
-    description: "Security group for web applications",
-    egress: [
-      { protocol: "-1", fromPort: 0, toPort: 0, cidrBlocks: [publicRouteCidr] },
-    ],
-    tags: {
-      Name: "application-sg",
+  const applicationSecurityGroup = new aws.ec2.SecurityGroup(
+    "applicationSecurityGroup",
+    {
+      vpcId: vpc.id,
+      description: "Security group for web applications",
+      egress: [
+        {
+          protocol: "-1",
+          fromPort: 0,
+          toPort: 0,
+          cidrBlocks: [publicRouteCidr],
+        },
+      ],
+      tags: {
+        Name: "application-sg",
+      },
     }
-  });
-
-  // Allow SSH (port 22) from anywhere
-  new aws.ec2.SecurityGroupRule("allow-ssh", {
-    type: "ingress",
-    fromPort: 22,
-    toPort: 22,
-    protocol: "tcp",
-    cidrBlocks: [publicRouteCidr],
-    securityGroupId: applicationSecurityGroup.id,
-  });
-
-  // Allow HTTP (port 80) from anywhere
-  new aws.ec2.SecurityGroupRule("allow-http", {
-    type: "ingress",
-    fromPort: 80,
-    toPort: 80,
-    protocol: "tcp",
-    cidrBlocks: [publicRouteCidr],
-    securityGroupId: applicationSecurityGroup.id,
-  });
-
-  // Allow HTTPS (port 443) from anywhere
-  new aws.ec2.SecurityGroupRule("allow-https", {
-    type: "ingress",
-    fromPort: 443,
-    toPort: 443,
-    protocol: "tcp",
-    cidrBlocks: [publicRouteCidr],
-    securityGroupId: applicationSecurityGroup.id,
-  });
-
-  new aws.ec2.SecurityGroupRule("allow-app-port", {
-    type: "ingress",
-    fromPort: 8080,
-    toPort: 8080,
-    protocol: "tcp",
-    cidrBlocks: [publicRouteCidr],
-    securityGroupId: applicationSecurityGroup.id,
-  });
+  );
 
   // Create an EC2 security group for RDS
   const dbSecurityGroup = new aws.ec2.SecurityGroup("dbSecurityGroup", {
@@ -153,6 +137,99 @@ const run = async () => {
     tags: {
       Name: "db-sg",
     },
+  });
+
+  // Crete a load balancer security group
+  const loadBalancerSecurityGroup = new aws.ec2.SecurityGroup(
+    "loadBalancerSecurityGroup",
+    {
+      vpcId: vpc.id,
+      description: "Security group for the load balancer",
+      egress: [
+        { protocol: "-1", fromPort: 0, toPort: 0, cidrBlocks: ["0.0.0.0/0"] },
+      ],
+    }
+  );
+
+  //LOAD BALANCER SG RULES
+  //attach egress rule for load balancer security group  with source as application security group
+  // new aws.ec2.SecurityGroupRule("lb-egress-all-traffic", {
+  //   type: "egress",
+  //   fromPort: 0,
+  //   toPort: 0,
+  //   protocol: "-1",
+  //   cidrBlocks: [publicRouteCidr],
+  //   securityGroupId: loadBalancerSecurityGroup.id,
+  // });
+
+  //attach egress rule for loadbalancer security group for port 8080 with source as application security group
+  new aws.ec2.SecurityGroupRule("lb-egress-app-port", {
+    type: "egress",
+    fromPort: 8080,
+    toPort: 8080,
+    protocol: "tcp",
+    // cidrBlocks: ["0.0.0.0/0"],
+    sourceSecurityGroupId: applicationSecurityGroup.id,
+    securityGroupId: loadBalancerSecurityGroup.id,
+  });
+
+  // Allow SSH (port 22) from anywhere
+  new aws.ec2.SecurityGroupRule("allow-ssh", {
+    type: "ingress",
+    fromPort: 22,
+    toPort: 22,
+    protocol: "tcp",
+    sourceSecurityGroupId: loadBalancerSecurityGroup.id, // Allow traffic from the load balancer
+    securityGroupId: applicationSecurityGroup.id,
+  });
+
+  //   // Allow HTTP (port 80) from anywhere
+  //   new aws.ec2.SecurityGroupRule("allow-http", {
+  //     type: "ingress",
+  //     fromPort: 80,
+  //     toPort: 80,
+  //     protocol: "tcp",
+  //     cidrBlocks: [publicRouteCidr],
+  //     securityGroupId: applicationSecurityGroup.id,
+  //   });
+
+  //   // Allow HTTPS (port 443) from anywhere
+  //   new aws.ec2.SecurityGroupRule("allow-https", {
+  //     type: "ingress",
+  //     fromPort: 443,
+  //     toPort: 443,
+  //     protocol: "tcp",
+  //     cidrBlocks: [publicRouteCidr],
+  //     securityGroupId: applicationSecurityGroup.id,
+  //   });
+
+  new aws.ec2.SecurityGroupRule("allow-app-port", {
+    type: "ingress",
+    fromPort: 8080,
+    toPort: 8080,
+    protocol: "tcp",
+    sourceSecurityGroupId: loadBalancerSecurityGroup.id, // Allow traffic from the load balancer
+    securityGroupId: applicationSecurityGroup.id,
+  });
+
+  // Allow HTTP traffic (port 80) from anywhere
+  new aws.ec2.SecurityGroupRule("allow-http", {
+    type: "ingress",
+    fromPort: 80,
+    toPort: 80,
+    protocol: "tcp",
+    cidrBlocks: [publicRouteCidr], // Allow traffic from anywhere
+    securityGroupId: loadBalancerSecurityGroup.id,
+  });
+
+  // Allow HTTPS traffic (port 443) from anywhere
+  new aws.ec2.SecurityGroupRule("allow-https", {
+    type: "ingress",
+    fromPort: 443,
+    toPort: 443,
+    protocol: "tcp",
+    cidrBlocks: [publicRouteCidr], // Allow traffic from anywhere
+    securityGroupId: loadBalancerSecurityGroup.id,
   });
 
   // Allow incoming connections from the application security group
@@ -266,40 +343,213 @@ const run = async () => {
         -m ec2 \
         -c file:/opt/csye6225/webapp/cloudwatch-config.json \
         -s`;
-        // Create an EC2 instance with the dynamic user data
-        const ec2Instance = new aws.ec2.Instance("myEC2Instance", {
-          ami: ami,
-          keyName: key,
-          iamInstanceProfile: instanceProfile.name,
+        // // Create an EC2 instance with the dynamic user data
+        // const ec2Instance = new aws.ec2.Instance("myEC2Instance", {
+        //   ami: ami,
+        //   keyName: key,
+        //   iamInstanceProfile: instanceProfile.name,
+        //   instanceType: "t2.micro",
+        //   vpcSecurityGroupIds: [applicationSecurityGroup.id, dbSecurityGroup.id],
+        //   subnetId: publicSubnets[0].id,
+        //   rootBlockDevice: {
+        //     volumeSize: 25,
+        //     volumeType: "gp2",
+        //     deleteOnTermination: true,
+        //   },
+        //   associatePublicIpAddress: true,
+        //   userData: user_data,
+        //   tags: {
+        //     Name: "my-ec2-instance",
+        //   },
+        // });
+
+        const base64UserData = Buffer.from(user_data).toString("base64");
+
+        //Step1: Launch Template
+        const launchTemplate = new aws.ec2.LaunchTemplate("myLaunchTemplate", {
+          namePrefix: "my-launch-template",
+          blockDeviceMappings: [
+            {
+              deviceName: "/dev/xvda",
+              ebs: {
+                volumeSize: 25,
+                volumeType: "gp2",
+                deleteOnTermination: true,
+              },
+            },
+          ],
           instanceType: "t2.micro",
-          vpcSecurityGroupIds: [applicationSecurityGroup.id, dbSecurityGroup.id],
-          subnetId: publicSubnets[0].id,
-          rootBlockDevice: {
-            volumeSize: 25,
-            volumeType: "gp2",
-            deleteOnTermination: true,
+          imageId: ami,
+          keyName: key,
+          iamInstanceProfile: {
+            name: instanceProfile.name,
           },
-          associatePublicIpAddress: true,
-          userData: user_data,
-          tags: {
-            Name: "my-ec2-instance",
+          vpcSecurityGroupIds: [
+            applicationSecurityGroup.id,
+            dbSecurityGroup.id,
+          ],
+          userData: base64UserData,
+          subnetId: publicSubnets[0].id,
+        });
+
+        // Step 4: Create an Application Load Balancer
+        const loadBalancer = new aws.lb.LoadBalancer("myLoadBalancer", {
+          internal: false, // Set to true if it's an internal ALB.
+          loadBalancerType: "application",
+          securityGroups: [loadBalancerSecurityGroup.id],
+          subnets: publicSubnets.map((subnet) => subnet.id),
+        });
+
+        //Target Group
+        const targetGroup = new aws.lb.TargetGroup("AppTargetGroup", {
+          port: 8080,
+          protocol: "HTTP",
+          vpcId: vpc.id,
+          targetType: "instance",
+          healthCheck: {
+            healthyThreshold: 3,
+            unhealthyThreshold: 3,
+            timeout: 10,
+            interval: 30,
+            protocol: "HTTP",
+            path: "/healthz",
+            port: "8080",
+            matcher: "200",
           },
         });
 
-        // Output the public IP of the EC2 instance
-        exports.ec2PublicIp = ec2Instance.publicIp.apply((ip) => ip);
+        // Create an AWS Listener for the Load Balancer
+        const listener = new aws.lb.Listener("front_end", {
+          loadBalancerArn: loadBalancer.arn,
+          port: 80,
+          protocol: "HTTP",
+          defaultActions: [
+            {
+              type: "forward",
+              targetGroupArn: targetGroup.arn,
+            },
+          ],
+        });
 
-        // Create a DNS A record pointing to the EC2 instance's public IP
         const aRecord = new aws.route53.Record("my-a-record", {
           zoneId: hostedZoneId,
           name: "demo.anweshcloud.me",
           type: "A",
-          ttl: 300,
-          records: [ec2Instance.publicIp],
+          aliases: [
+            {
+              name: loadBalancer.dnsName,
+              zoneId: loadBalancer.zoneId,
+              evaluateTargetHealth: true,
+            },
+          ],
         });
 
         // Optionally export the DNS record's FQDN if needed
         exports.aRecordFQDN = aRecord.fqdn;
+
+        // Step 2: Create an Auto Scaling Group
+        const autoScalingGroup = new aws.autoscaling.Group(
+          "myAutoScalingGroup",
+          {
+            launchTemplate: {
+              id: launchTemplate.id,
+              version: launchTemplate.latestVersion,
+            },
+            minSize: 1,
+            maxSize: 3,
+            desiredCapacity: 1,
+            healthCheckType: "EC2",
+            healthCheckGracePeriod: 300,
+            forceDelete: true,
+            tags: [
+              {
+                key: "Name",
+                value: "MyAutoScalingGroup",
+                propagateAtLaunch: true,
+              },
+            ],
+            vpcZoneIdentifiers: publicSubnets.map((subnet) => subnet.id),
+            targetGroupArns: [targetGroup.arn], // Assuming you have a target group for the ALB.
+            cooldown: 60,
+            // ... other Auto Scaling Group configurations ...
+          }
+        );
+
+        // // Step 3: Create Auto Scaling Policies
+        // const scaleUpPolicy = new aws.autoscaling.Policy("scaleUpPolicy", {
+        //   adjustmentType: "ChangeCount", // Use "ChangeCount" to increment by 1.
+        //   policyType: "TargetTrackingScaling",
+        //   autoscalingGroupName: autoScalingGroup.name,
+        //   targetTrackingConfiguration: {
+        //     predefinedMetricSpecification: {
+        //       predefinedMetricType: "ASGAverageCPUUtilization",
+        //     },
+        //     targetValue: 5, // You can adjust this target value.
+        //   },
+        // });
+
+        // const scaleDownPolicy = new aws.autoscaling.Policy("scaleDownPolicy", {
+        //   adjustmentType: "ChangeCount", // Use "ChangeCount" to increment by 1.
+        //   policyType: "TargetTrackingScaling",
+        //   autoscalingGroupName: autoScalingGroup.name,
+        //   targetTrackingConfiguration: {
+        //     predefinedMetricSpecification: {
+        //       predefinedMetricType: "ASGAverageCPUUtilization",
+        //     },
+        //     targetValue: 3, // You can adjust this target value.
+        //   },
+        // });
+
+        // Step 3: Create Auto Scaling Policies
+        // Step 3: Create Auto Scaling Policies
+        const scaleUpPolicy = new aws.autoscaling.Policy("scaleUpPolicy", {
+          scalingAdjustment: 1,
+          adjustmentType: "ChangeInCapacity",
+          cooldown: 60,
+          autoscalingGroupName: autoScalingGroup.name,
+          policyType: "SimpleScaling",
+          metricAggregationType: "Average",
+        });
+
+        const scaleDownPolicy = new aws.autoscaling.Policy("scaleDownPolicy", {
+          scalingAdjustment: -1,
+          adjustmentType: "ChangeInCapacity",
+          cooldown: 60,
+          autoscalingGroupName: autoScalingGroup.name,
+          policyType: "SimpleScaling",
+          metricAggregationType: "Average",
+        });
+
+        const cpuUsageAlarm = new aws.cloudwatch.MetricAlarm("cpuUsageAlarm", {
+          comparisonOperator: "GreaterThanThreshold",
+          evaluationPeriods: 2,
+          metricName: "CPUUtilization",
+          namespace: "AWS/EC2",
+          period: 60,
+          statistic: "Average",
+          threshold: 3,
+          alarmActions: [scaleUpPolicy.arn],
+          dimensions: {
+            AutoScalingGroupName: autoScalingGroup.name,
+          },
+        });
+
+        const scaleDownAlarm = new aws.cloudwatch.MetricAlarm(
+          "scaleDownAlarm",
+          {
+            comparisonOperator: "LessThanThreshold",
+            evaluationPeriods: 2,
+            metricName: "CPUUtilization",
+            namespace: "AWS/EC2",
+            period: 60,
+            statistic: "Average",
+            threshold: 1,
+            alarmActions: [scaleDownPolicy.arn],
+            dimensions: {
+              AutoScalingGroupName: autoScalingGroup.name,
+            },
+          }
+        );
       } else {
         console.error("No RDS instance found.");
       }
