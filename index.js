@@ -1,5 +1,6 @@
 const pulumi = require("@pulumi/pulumi");
 const aws = require("@pulumi/aws");
+const gcp = require("@pulumi/gcp");
 const AWS = require("aws-sdk");
 const {
   RDSClient,
@@ -16,6 +17,7 @@ const region = config.require("region");
 const ami = config.require("ami");
 const key = config.require("key");
 const hostedZoneId = config.require("zoneId");
+const lambdaFunctionCodePath = config.require("lambdaFunctionCodePath");
 
 AWS.config.update({ region: region });
 
@@ -32,6 +34,9 @@ const run = async () => {
 
   console.log("Availability Zones:", availabilityZones);
 
+  var snsTopic = new aws.sns.Topic("mySNSTopic", {
+    displayName: "My SNS Topic",
+  });
   // Create a new VPC
   const vpc = new aws.ec2.Vpc("myVpc", {
     cidrBlock: vpcCidrBlock,
@@ -266,7 +271,10 @@ const run = async () => {
     subnetIds: [privateSubnets[0].id, privateSubnets[1].id],
   });
 
+
+
   // Create an RDS instance
+
   const rdsInstanceCreate = new aws.rds.Instance("webappclouddb-rds-instance", {
     allocatedStorage: 20,
     storageType: "gp2",
@@ -275,7 +283,7 @@ const run = async () => {
     instanceClass: "db.t2.micro",
     username: "root",
     password: "password",
-    dbName: "webappclouddb",
+    dbName: "webapp",
     skipFinalSnapshot: true,
     multiAz: false,
     publiclyAccessible: false,
@@ -314,249 +322,421 @@ const run = async () => {
   });
 
   // Retrieve RDS details using AWS SDK v3
-  pulumi.all([rdsInstanceCreate.identifier]).apply(async ([instanceId]) => {
+  pulumi.all([snsTopic.arn]).apply(async ([topicArn]) => {
     try {
-      // Create an RDS client
-      const rdsClient = new RDSClient({ region: region });
+      pulumi.all([rdsInstanceCreate.identifier]).apply(async ([instanceId]) => {
+        try {
+          // Create an RDS client
+          const rdsClient = new RDSClient({ region: region });
 
-      // Describe the RDS instances
-      const describeDBInstancesCommand = new DescribeDBInstancesCommand({});
-      const response = await rdsClient.send(describeDBInstancesCommand);
+          // Describe the RDS instances
+          const describeDBInstancesCommand = new DescribeDBInstancesCommand({});
+          const response = await rdsClient.send(describeDBInstancesCommand);
 
-      // Extract the details of the RDS instance
-      const dbInstances = response.DBInstances;
-      if (dbInstances.length > 0) {
-        const dbInstance = dbInstances[0];
-        const dbUsername = dbInstance.MasterUsername;
-        const dbEndpoint = dbInstance.Endpoint.Address;
-        const dbName = dbInstance.DBName;
-        const dbDialect = "mysql";
+          // Extract the details of the RDS instance
+          const dbInstances = response.DBInstances;
+          if (dbInstances.length > 0) {
+            const dbInstance = dbInstances[0];
+            const dbUsername = dbInstance.MasterUsername;
+            const dbEndpoint = dbInstance.Endpoint.Address;
+            const dbName = dbInstance.DBName;
+            const dbDialect = "mysql";
 
-        const user_data = `#!/bin/bash
+            const user_data = `#!/bin/bash
         echo "DB_USERNAME=${dbUsername}" >> /opt/csye6225/webapp/.env
         echo "DB_PASSWORD=password" >> /opt/csye6225/webapp/.env
         echo "DB_HOST=${dbEndpoint}" >> /opt/csye6225/webapp/.env
         echo "DB_DATABASE=${dbName}" >> /opt/csye6225/webapp/.env
         echo "DB_DIALECT=${dbDialect}" >> /opt/csye6225/webapp/.env
+        echo "TOPIC_ARN=${topicArn}" >> /opt/csye6225/webapp/.env
         sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
         -a fetch-config \
         -m ec2 \
         -c file:/opt/csye6225/webapp/cloudwatch-config.json \
         -s`;
-        // // Create an EC2 instance with the dynamic user data
-        // const ec2Instance = new aws.ec2.Instance("myEC2Instance", {
-        //   ami: ami,
-        //   keyName: key,
-        //   iamInstanceProfile: instanceProfile.name,
-        //   instanceType: "t2.micro",
-        //   vpcSecurityGroupIds: [applicationSecurityGroup.id, dbSecurityGroup.id],
-        //   subnetId: publicSubnets[0].id,
-        //   rootBlockDevice: {
-        //     volumeSize: 25,
-        //     volumeType: "gp2",
-        //     deleteOnTermination: true,
-        //   },
-        //   associatePublicIpAddress: true,
-        //   userData: user_data,
-        //   tags: {
-        //     Name: "my-ec2-instance",
-        //   },
-        // });
 
-        const base64UserData = Buffer.from(user_data).toString("base64");
+            const base64UserData = Buffer.from(user_data).toString("base64");
 
-        //Step1: Launch Template
-        const launchTemplate = new aws.ec2.LaunchTemplate("myLaunchTemplate", {
-          namePrefix: "my-launch-template",
-          blockDeviceMappings: [
-            {
-              deviceName: "/dev/xvda",
-              ebs: {
-                volumeSize: 25,
-                volumeType: "gp2",
-                deleteOnTermination: true,
-              },
-            },
-          ],
-          instanceType: "t2.micro",
-          imageId: ami,
-          keyName: key,
-          iamInstanceProfile: {
-            name: instanceProfile.name,
-          },
-          vpcSecurityGroupIds: [
-            applicationSecurityGroup.id,
-            dbSecurityGroup.id,
-          ],
-          userData: base64UserData,
-          subnetId: publicSubnets[0].id,
-        });
-
-        // Step 4: Create an Application Load Balancer
-        const loadBalancer = new aws.lb.LoadBalancer("myLoadBalancer", {
-          internal: false, // Set to true if it's an internal ALB.
-          loadBalancerType: "application",
-          securityGroups: [loadBalancerSecurityGroup.id],
-          subnets: publicSubnets.map((subnet) => subnet.id),
-        });
-
-        //Target Group
-        const targetGroup = new aws.lb.TargetGroup("AppTargetGroup", {
-          port: 8080,
-          protocol: "HTTP",
-          vpcId: vpc.id,
-          targetType: "instance",
-          healthCheck: {
-            healthyThreshold: 3,
-            unhealthyThreshold: 3,
-            timeout: 10,
-            interval: 30,
-            protocol: "HTTP",
-            path: "/healthz",
-            port: "8080",
-            matcher: "200",
-          },
-        });
-
-        // Create an AWS Listener for the Load Balancer
-        const listener = new aws.lb.Listener("front_end", {
-          loadBalancerArn: loadBalancer.arn,
-          port: 80,
-          protocol: "HTTP",
-          defaultActions: [
-            {
-              type: "forward",
-              targetGroupArn: targetGroup.arn,
-            },
-          ],
-        });
-
-        const aRecord = new aws.route53.Record("my-a-record", {
-          zoneId: hostedZoneId,
-          name: "demo.anweshcloud.me",
-          type: "A",
-          aliases: [
-            {
-              name: loadBalancer.dnsName,
-              zoneId: loadBalancer.zoneId,
-              evaluateTargetHealth: true,
-            },
-          ],
-        });
-
-        // Optionally export the DNS record's FQDN if needed
-        exports.aRecordFQDN = aRecord.fqdn;
-
-        // Step 2: Create an Auto Scaling Group
-        const autoScalingGroup = new aws.autoscaling.Group(
-          "myAutoScalingGroup",
-          {
-            launchTemplate: {
-              id: launchTemplate.id,
-              version: launchTemplate.latestVersion,
-            },
-            minSize: 1,
-            maxSize: 3,
-            desiredCapacity: 1,
-            healthCheckType: "EC2",
-            healthCheckGracePeriod: 300,
-            forceDelete: true,
-            tags: [
+            //Step1: Launch Template
+            const launchTemplate = new aws.ec2.LaunchTemplate(
+              "myLaunchTemplate",
               {
-                key: "Name",
-                value: "MyAutoScalingGroup",
-                propagateAtLaunch: true,
+                namePrefix: "my-launch-template",
+                blockDeviceMappings: [
+                  {
+                    deviceName: "/dev/xvda",
+                    ebs: {
+                      volumeSize: 25,
+                      volumeType: "gp2",
+                      deleteOnTermination: true,
+                    },
+                  },
+                ],
+                instanceType: "t2.micro",
+                imageId: ami,
+                keyName: key,
+                iamInstanceProfile: {
+                  name: instanceProfile.name,
+                },
+                vpcSecurityGroupIds: [
+                  applicationSecurityGroup.id,
+                  dbSecurityGroup.id,
+                ],
+                userData: base64UserData,
+                subnetId: publicSubnets[0].id,
+              }
+            );
+
+            // Step 4: Create an Application Load Balancer
+            const loadBalancer = new aws.lb.LoadBalancer("myLoadBalancer", {
+              internal: false, // Set to true if it's an internal ALB.
+              loadBalancerType: "application",
+              securityGroups: [loadBalancerSecurityGroup.id],
+              subnets: publicSubnets.map((subnet) => subnet.id),
+            });
+
+            //Target Group
+            const targetGroup = new aws.lb.TargetGroup("AppTargetGroup", {
+              port: 8080,
+              protocol: "HTTP",
+              vpcId: vpc.id,
+              targetType: "instance",
+              healthCheck: {
+                healthyThreshold: 10,
+                unhealthyThreshold: 5,
+                timeout: 10,
+                interval: 30,
+                protocol: "HTTP",
+                path: "/healthz",
+                port: "8080",
+                matcher: "200",
               },
-            ],
-            vpcZoneIdentifiers: publicSubnets.map((subnet) => subnet.id),
-            targetGroupArns: [targetGroup.arn], // Assuming you have a target group for the ALB.
-            cooldown: 60,
-            // ... other Auto Scaling Group configurations ...
+            });
+
+            // Create an AWS Listener for the Load Balancer
+            const listener = new aws.lb.Listener("front_end", {
+              loadBalancerArn: loadBalancer.arn,
+              port: 80,
+              protocol: "HTTP",
+              defaultActions: [
+                {
+                  type: "forward",
+                  targetGroupArn: targetGroup.arn,
+                },
+              ],
+            });
+
+            const aRecord = new aws.route53.Record("my-a-record", {
+              zoneId: hostedZoneId,
+              name: "demo.anweshcloud.me",
+              type: "A",
+              aliases: [
+                {
+                  name: loadBalancer.dnsName,
+                  zoneId: loadBalancer.zoneId,
+                  evaluateTargetHealth: true,
+                },
+              ],
+            });
+
+            // Optionally export the DNS record's FQDN if needed
+            exports.aRecordFQDN = aRecord.fqdn;
+
+            // Step 2: Create an Auto Scaling Group
+            const autoScalingGroup = new aws.autoscaling.Group(
+              "myAutoScalingGroup",
+              {
+                launchTemplate: {
+                  id: launchTemplate.id,
+                  version: launchTemplate.latestVersion,
+                },
+                minSize: 1,
+                maxSize: 3,
+                desiredCapacity: 1,
+                healthCheckType: "EC2",
+                healthCheckGracePeriod: 300,
+                forceDelete: true,
+                tags: [
+                  {
+                    key: "Name",
+                    value: "MyAutoScalingGroup",
+                    propagateAtLaunch: true,
+                  },
+                ],
+                vpcZoneIdentifiers: publicSubnets.map((subnet) => subnet.id),
+                targetGroupArns: [targetGroup.arn], // Assuming you have a target group for the ALB.
+                cooldown: 60,
+                // ... other Auto Scaling Group configurations ...
+              }
+            );
+
+            // Step 3: Create Auto Scaling Policies
+            const scaleUpPolicy = new aws.autoscaling.Policy("scaleUpPolicy", {
+              scalingAdjustment: 1,
+              adjustmentType: "ChangeInCapacity",
+              cooldown: 60,
+              autoscalingGroupName: autoScalingGroup.name,
+              policyType: "SimpleScaling",
+              metricAggregationType: "Average",
+            });
+
+            const scaleDownPolicy = new aws.autoscaling.Policy(
+              "scaleDownPolicy",
+              {
+                scalingAdjustment: -1,
+                adjustmentType: "ChangeInCapacity",
+                cooldown: 60,
+                autoscalingGroupName: autoScalingGroup.name,
+                policyType: "SimpleScaling",
+                metricAggregationType: "Average",
+              }
+            );
+
+            const cpuUsageAlarm = new aws.cloudwatch.MetricAlarm(
+              "cpuUsageAlarm",
+              {
+                comparisonOperator: "GreaterThanThreshold",
+                evaluationPeriods: 2,
+                metricName: "CPUUtilization",
+                namespace: "AWS/EC2",
+                period: 60,
+                statistic: "Average",
+                threshold: 3,
+                alarmActions: [scaleUpPolicy.arn],
+                dimensions: {
+                  AutoScalingGroupName: autoScalingGroup.name,
+                },
+              }
+            );
+
+            const scaleDownAlarm = new aws.cloudwatch.MetricAlarm(
+              "scaleDownAlarm",
+              {
+                comparisonOperator: "LessThanThreshold",
+                evaluationPeriods: 2,
+                metricName: "CPUUtilization",
+                namespace: "AWS/EC2",
+                period: 60,
+                statistic: "Average",
+                threshold: 1,
+                alarmActions: [scaleDownPolicy.arn],
+                dimensions: {
+                  AutoScalingGroupName: autoScalingGroup.name,
+                },
+              }
+            );
+          } else {
+            console.error("No RDS instance found.");
           }
-        );
+        } catch (error) {
+          console.error("Error retrieving RDS instance details:", error);
+        }
+      });
 
-        // // Step 3: Create Auto Scaling Policies
-        // const scaleUpPolicy = new aws.autoscaling.Policy("scaleUpPolicy", {
-        //   adjustmentType: "ChangeCount", // Use "ChangeCount" to increment by 1.
-        //   policyType: "TargetTrackingScaling",
-        //   autoscalingGroupName: autoScalingGroup.name,
-        //   targetTrackingConfiguration: {
-        //     predefinedMetricSpecification: {
-        //       predefinedMetricType: "ASGAverageCPUUtilization",
-        //     },
-        //     targetValue: 5, // You can adjust this target value.
-        //   },
-        // });
-
-        // const scaleDownPolicy = new aws.autoscaling.Policy("scaleDownPolicy", {
-        //   adjustmentType: "ChangeCount", // Use "ChangeCount" to increment by 1.
-        //   policyType: "TargetTrackingScaling",
-        //   autoscalingGroupName: autoScalingGroup.name,
-        //   targetTrackingConfiguration: {
-        //     predefinedMetricSpecification: {
-        //       predefinedMetricType: "ASGAverageCPUUtilization",
-        //     },
-        //     targetValue: 3, // You can adjust this target value.
-        //   },
-        // });
-
-        // Step 3: Create Auto Scaling Policies
-        // Step 3: Create Auto Scaling Policies
-        const scaleUpPolicy = new aws.autoscaling.Policy("scaleUpPolicy", {
-          scalingAdjustment: 1,
-          adjustmentType: "ChangeInCapacity",
-          cooldown: 60,
-          autoscalingGroupName: autoScalingGroup.name,
-          policyType: "SimpleScaling",
-          metricAggregationType: "Average",
-        });
-
-        const scaleDownPolicy = new aws.autoscaling.Policy("scaleDownPolicy", {
-          scalingAdjustment: -1,
-          adjustmentType: "ChangeInCapacity",
-          cooldown: 60,
-          autoscalingGroupName: autoScalingGroup.name,
-          policyType: "SimpleScaling",
-          metricAggregationType: "Average",
-        });
-
-        const cpuUsageAlarm = new aws.cloudwatch.MetricAlarm("cpuUsageAlarm", {
-          comparisonOperator: "GreaterThanThreshold",
-          evaluationPeriods: 2,
-          metricName: "CPUUtilization",
-          namespace: "AWS/EC2",
-          period: 60,
-          statistic: "Average",
-          threshold: 3,
-          alarmActions: [scaleUpPolicy.arn],
-          dimensions: {
-            AutoScalingGroupName: autoScalingGroup.name,
-          },
-        });
-
-        const scaleDownAlarm = new aws.cloudwatch.MetricAlarm(
-          "scaleDownAlarm",
-          {
-            comparisonOperator: "LessThanThreshold",
-            evaluationPeriods: 2,
-            metricName: "CPUUtilization",
-            namespace: "AWS/EC2",
-            period: 60,
-            statistic: "Average",
-            threshold: 1,
-            alarmActions: [scaleDownPolicy.arn],
-            dimensions: {
-              AutoScalingGroupName: autoScalingGroup.name,
-            },
-          }
-        );
-      } else {
-        console.error("No RDS instance found.");
-      }
+      const snsPublishPolicy = new aws.iam.Policy("snsPublishPolicy", {
+        policy: pulumi.interpolate`{
+         "Version": "2012-10-17",
+         "Statement": [
+           {
+             "Effect": "Allow",
+             "Action": "sns:Publish",
+             "Resource": "${snsTopic.arn}"
+           }
+         ]
+       }`,
+      });
+    
+    
+      // Attach the Policy to the EC2 Role
+      const rolePolicyAttachment = new aws.iam.RolePolicyAttachment(
+        "snsPublishRolePolicyAttachment",
+        {
+          role: role.name,
+          policyArn: snsPublishPolicy.arn,
+        }
+      );
     } catch (error) {
-      console.error("Error retrieving RDS instance details:", error);
+      console.error("Error retrieving SNS instance details:", error);
     }
+  });
+
+  // Create an SNS topic
+
+  // // Create an IAM role
+  // const snsPublishRole = new aws.iam.Role("snsPublishRole", {
+  //   assumeRolePolicy: JSON.stringify({
+  //     Version: "2012-10-17",
+  //     Statement: [
+  //       {
+  //         Action: "sts:AssumeRole",
+  //         Effect: "Allow",
+  //         Principal: {
+  //           Service: "sns.amazonaws.com",
+  //         },
+  //       },
+  //     ],
+  //   }),
+  // });
+
+  // Create a policy that allows publishing to the SNS topic
+
+  // // Example IAM role policy for SNS permissions
+  // const snsRolePolicy = new aws.iam.RolePolicy("snsRolePolicy", {
+  //   role: role.name,
+  //   policy: {
+  //     Version: "2012-10-17",
+  //     Statement: [
+  //       {
+  //         Effect: "Allow",
+  //         Action: "sns:Publish",
+  //         Resource: snsTopic.arn,
+  //       },
+  //     ],
+  //   },
+  // });
+
+  // // Optionally, you can subscribe an email address to the SNS topic
+  // const emailSubscription = new aws.sns.TopicSubscription("emailSubscription", {
+  //   endpoint: "anwesh.peddineni+demo@gmail.com", // Replace with your email address
+  //   protocol: "email",
+  //   topic: snsTopic.arn,
+  // });
+
+  // Create a Google Cloud Storage bucket
+  const bucket = new gcp.storage.Bucket("my-bucket", {
+    location: "US",
+    forceDestroy: "true",
+  });
+
+  // Create a Google Service Account
+  const serviceAccount = new gcp.serviceaccount.Account("myServiceAccount", {
+    accountId: "cloud-demo-account-01",
+    displayName: "My Service Account",
+  });
+
+  // Create a service account key
+  const serviceAccountKey = new gcp.serviceaccount.Key("myServiceAccountKey", {
+    serviceAccountId: serviceAccount.name,
+  });
+
+  const gcpBucketIAMBinding = new gcp.storage.BucketIAMMember(
+    "bucketIAMMember",
+    {
+      bucket: bucket.id,
+      role: "roles/storage.objectCreator",
+      member: pulumi.interpolate`serviceAccount:${serviceAccount.email}`,
+    }
+  );
+
+  // DynamoDB table for tracking emails
+  const emailTable = new aws.dynamodb.Table("emailTable", {
+    attributes: [{ name: "id", type: "S" }],
+    hashKey: "id",
+    billingMode: "PAY_PER_REQUEST",
+  });
+
+  // IAM role for the Lambda function
+  const lambdaRole = new aws.iam.Role("lambdaRole", {
+    assumeRolePolicy: JSON.stringify({
+      Version: "2012-10-17",
+      Statement: [
+        {
+          Action: "sts:AssumeRole",
+          Principal: {
+            Service: "lambda.amazonaws.com",
+          },
+          Effect: "Allow",
+        },
+      ],
+    }),
+  });
+
+  // const lambdaPolicy = new aws.iam.Policy("lambdaPolicy", {
+  //   policy: JSON.stringify({
+  //     Version: "2012-10-17",
+  //     Statement: [
+  //       {
+  //         Action: ["dynamodb:", "logs:", "cloudwatch:*"],
+  //         Effect: "Allow",
+  //         Resource: "*",
+  //       },
+  //     ],
+  //   }),
+  // });
+
+  const lambdaPolicy = new aws.iam.Policy("lambdaPolicy", {
+    policy: JSON.stringify({
+      Version: "2012-10-17",
+      Statement: [
+        {
+          Action: [
+            "dynamodb:PutItem",
+            "logs:CreateLogGroup",
+            "logs:CreateLogStream",
+            "logs:PutLogEvents",
+            "logs:DescribeLogStreams",
+            "cloudwatch:PutMetricData",
+            "cloudwatch:GetMetricStatistics",
+            "cloudwatch:ListMetrics",
+            "cloudwatch:DescribeAlarms",
+            "cloudwatch:PutMetricAlarm",
+            "cloudwatch:GetMetricWidgetImage",
+            "cloudwatch:GetMetricData",
+            "cloudwatch:SetAlarmState",
+          ],
+          Effect: "Allow",
+          Resource: "*",
+        },
+      ],
+    }),
+  });
+
+  const lambdaPolicyAttachment = new aws.iam.RolePolicyAttachment(
+    "lambdaPolicyAttachment",
+    {
+      role: lambdaRole.name,
+      policyArn: lambdaPolicy.arn,
+    }
+  );
+
+  // Lambda function
+const lambdaFunction = new aws.lambda.Function("myLambdaFunction", {
+  code: new pulumi.asset.FileArchive(lambdaFunctionCodePath),
+  handler: "index.handler",
+  //timeout: 60,
+  role: lambdaRole.arn,
+  runtime: "nodejs18.x",
+  environment: {
+      variables: {
+          SNS_TOPIC_ARN: snsTopic.arn,
+          DYNAMODB_TABLE_NAME: emailTable.name,
+          GCS_BUCKET_NAME: bucket.name,
+          GCS_SERVICE_ACCOUNT_KEY: serviceAccountKey.privateKey,
+          MAILGUN_API_KEY: "a2bc218bad38f1c5a936c8c1a7d27fae-30b58138-e82c2cd5",
+          MAILGUN_DOMAIN: "demo.anweshcloud.me",
+          GOOGLE_CLIENT_MAIL: serviceAccount.email,
+          GOOGLE_PROJECT_ID: "cloud-demo-406223",
+      },
+  },
+});
+
+  // Grant SNS permissions to invoke the lambda function
+  const snsInvokeLambda = new aws.lambda.Permission("snsInvokeLambda", {
+    action: "lambda:InvokeFunction",
+    function: lambdaFunction,
+    principal: "sns.amazonaws.com",
+    sourceArn: snsTopic.arn,
+  });
+
+  // Configure SNS topic to trigger lambda function
+  const lambdaTrigger = new aws.sns.TopicSubscription("lambdaTrigger", {
+    endpoint: lambdaFunction.arn.apply((arn) => arn),
+    protocol: "lambda",
+    topic: snsTopic.arn,
   });
 };
 
 run();
+
+
+

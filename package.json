@@ -6,6 +6,7 @@
         "@aws-sdk/client-rds": "^3.441.0",
         "@pulumi/aws": "^5.0.0",
         "@pulumi/awsx": "^1.0.0",
+        "@pulumi/gcp": "^7.2.1",
         "@pulumi/pulumi": "^3.0.0",
         "aws-sdk": "^2.1497.0"
     }
