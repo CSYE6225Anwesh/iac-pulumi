@@ -217,15 +217,7 @@ const run = async () => {
     securityGroupId: applicationSecurityGroup.id,
   });
 
-  // Allow HTTP traffic (port 80) from anywhere
-  new aws.ec2.SecurityGroupRule("allow-http", {
-    type: "ingress",
-    fromPort: 80,
-    toPort: 80,
-    protocol: "tcp",
-    cidrBlocks: [publicRouteCidr], // Allow traffic from anywhere
-    securityGroupId: loadBalancerSecurityGroup.id,
-  });
+  
 
   // Allow HTTPS traffic (port 443) from anywhere
   new aws.ec2.SecurityGroupRule("allow-https", {
@@ -349,6 +341,8 @@ const run = async () => {
         echo "DB_DATABASE=${dbName}" >> /opt/csye6225/webapp/.env
         echo "DB_DIALECT=${dbDialect}" >> /opt/csye6225/webapp/.env
         echo "TOPIC_ARN=${topicArn}" >> /opt/csye6225/webapp/.env
+        sudo systemctl daemon-reload
+        sudo systemctl restart web-app
         sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
         -a fetch-config \
         -m ec2 \
@@ -361,7 +355,7 @@ const run = async () => {
             const launchTemplate = new aws.ec2.LaunchTemplate(
               "myLaunchTemplate",
               {
-                namePrefix: "my-launch-template",
+                name: "my-launch-template",
                 blockDeviceMappings: [
                   {
                     deviceName: "/dev/xvda",
@@ -413,11 +407,18 @@ const run = async () => {
               },
             });
 
+            const selectedCertificate = aws.acm.getCertificate({
+              domain: "www.demo.anweshcloud.me",
+              mostRecent: true,
+            }, { async: true }).then(certificate => certificate.arn);
+
             // Create an AWS Listener for the Load Balancer
             const listener = new aws.lb.Listener("front_end", {
               loadBalancerArn: loadBalancer.arn,
-              port: 80,
-              protocol: "HTTP",
+              port: 443,
+              protocol: "HTTPS",
+              sslPolicy: "ELBSecurityPolicy-2016-08",
+              certificateArn: selectedCertificate,
               defaultActions: [
                 {
                   type: "forward",
@@ -450,6 +451,7 @@ const run = async () => {
                   id: launchTemplate.id,
                   version: launchTemplate.latestVersion,
                 },
+                name:"myAutoScalingGroup",
                 minSize: 1,
                 maxSize: 3,
                 desiredCapacity: 1,
