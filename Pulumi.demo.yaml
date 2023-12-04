@@ -1,5 +1,5 @@
 config:
-  Assigment_4:ami: "ami-09dd0d66c1bafb0cb"
+  Assigment_4:ami: "ami-05905b62fe0895b2f"
   Assigment_4:key: "demo_keypair"
   Assigment_4:publicRouteCidr: 0.0.0.0/0
   Assigment_4:region: us-east-1
